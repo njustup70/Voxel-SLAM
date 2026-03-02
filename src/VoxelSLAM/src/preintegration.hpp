@@ -2,11 +2,12 @@
 
 #include "tools.hpp"
 #include <deque>
-#include <sensor_msgs/Imu.h>
+#include <sensor_msgs/msg/imu.hpp>
+#include <rclcpp/rclcpp.hpp>
 
 // Don't forget to init
-double imupre_scale_gravity = 1.0;
-Eigen::Matrix<double, 6, 6> noiseMeas, noiseWalk;
+extern double imupre_scale_gravity;
+extern Eigen::Matrix<double, 6, 6> noiseMeas, noiseWalk;
 
 class IMU_PRE
 {
@@ -27,7 +28,7 @@ public:
 
   Eigen::Matrix<double, DIM, DIM> cov;
 
-  deque<sensor_msgs::ImuPtr> _imus;
+  deque<sensor_msgs::msg::Imu::SharedPtr> _imus;
 
   IMU_PRE(const Eigen::Vector3d &bg1 = Eigen::Vector3d::Zero(), const Eigen::Vector3d &ba1 = Eigen::Vector3d::Zero())
   {
@@ -47,16 +48,16 @@ public:
     cov.setZero();
   }
 
-  void push_imu(deque<sensor_msgs::ImuPtr> &imus)
+  void push_imu(deque<sensor_msgs::msg::Imu::SharedPtr> &imus)
   {
     _imus.insert(_imus.end(), imus.begin(), imus.end());
     Eigen::Vector3d cur_gyr, cur_acc;
     for(auto it_imu=imus.begin()+1; it_imu!=imus.end(); it_imu++)
     {
-      sensor_msgs::Imu &imu1 = **(it_imu-1);
-      sensor_msgs::Imu &imu2 = **it_imu;
+      sensor_msgs::msg::Imu &imu1 = **(it_imu-1);
+      sensor_msgs::msg::Imu &imu2 = **it_imu;
 
-      double dt = imu2.header.stamp.toSec() - imu1.header.stamp.toSec();
+      double dt = rclcpp::Time(imu2.header.stamp).seconds() - rclcpp::Time(imu1.header.stamp).seconds();
 
       cur_gyr << 0.5*(imu1.angular_velocity.x + imu2.angular_velocity.x),
                  0.5*(imu1.angular_velocity.y + imu2.angular_velocity.y),
@@ -90,27 +91,6 @@ public:
     v_bg = v_bg - R_dt * acc_skew * R_bg;
     R_bg = R_inc.transpose() * R_bg - R_jr*dt;
     
-    // Eigen::Matrix<double, DIM, DIM> Ai;
-    // Eigen::Matrix<double, DIM, DNOI> Bi;
-    // Ai.setIdentity(); Bi.setZero();
-    // Ai.block<3, 3>(0, 0) = R_inc.transpose();
-    // Ai.block<3, 3>(0, 9) = -I33 * dt;
-    // // Ai.block<3, 3>(3, 0) = -R_dt2_2 * acc_skew;
-    // Ai.block<3, 3>(3, 6) = I33 * dt;
-    // // Ai.block<3, 3>(3, 12) = -R_dt2_2;
-    // Ai.block<3, 3>(6, 0) = -R_dt * acc_skew;
-    // Ai.block<3, 3>(6, 12) = -R_dt;
-    // // Ai.block<3, 3>(6, 15) = I33 * dt;
-
-    // // Bi.block<3, 3>(0, 0) = R_jr * dt;
-    // Bi.block<3, 3>(0, 0) = dt * I33;
-    // // Bi.block<3, 3>(3, 3) = R_dt2_2;
-    // Bi.block<3, 3>(6, 3) = R_dt;
-    // Bi.block<3, 3>(9, 6) = I33 * dt;
-    // Bi.block<3, 3>(12, 9) = I33 * dt;
-
-    // cov = Ai*cov*Ai.transpose() + Bi*noi_imu*Bi.transpose();
-
     Eigen::Matrix<double, 9, 9> A;
     Eigen::Matrix<double, 9, 6> B;
     A.setIdentity(); B.setZero();
@@ -124,9 +104,7 @@ public:
     B.block<3, 3>(3, 3) = R_dt2_2;
     B.block<3, 3>(6, 3) = R_dt;
 
-    // cov.block<9, 9>(0, 0) = A * cov.block<9, 9>(0, 0) * A.transpose() + B * noiseMeas * B.transpose() * dt * dt;
     cov.block<9, 9>(0, 0) = A * cov.block<9, 9>(0, 0) * A.transpose() + B * noiseMeas * B.transpose();
-    // cov.block<6, 6>(9, 9) += noiseWalk * dt * dt;
     cov.block<6, 6>(9, 9) += noiseWalk * dt;
 
     p_delta += v_delta*dt + R_dt2_2*cur_acc;
@@ -161,14 +139,11 @@ public:
     rr.block<3, 1>(9, 0) = res_bg*b_wei;
     rr.block<3, 1>(12, 0) = res_ba*b_wei;
     
-    // rr.block<3, 1>(15, 0) = st2.g - st1.g;
-
     Eigen::Matrix<double, 15, 15> cov_inv = cov.inverse();
 
     if(jac_enable)
     {
       Eigen::Matrix3d JR_inv = jr_inv(res_r);
-      // joca.block<3, 3>(0, 0) = -JR_inv * st1.R.transpose() * st2.R;
       joca.block<3, 3>(0, 0) = -JR_inv * st2.R.transpose() * st1.R;
       jocb.block<3, 3>(0, 0) =  JR_inv;
       joca.block<3, 3>(0, 9) = -JR_inv * res_r.transpose() * jr(R_bg*dbg) * R_bg;
@@ -191,23 +166,14 @@ public:
       jocb.block<3, 3>(9, 9) = I33*b_wei;
       jocb.block<3, 3>(12, 12) = I33*b_wei;
 
-      // joca.block<3, 3>(3, 15) = -0.5 * st1.R.transpose() * dtime * dtime;
-      // joca.block<3, 3>(6, 15) = -st1.R.transpose() * dtime;
-      // joca.block<3, 3>(15, 15) = -I33;
-      // jocb.block<3, 3>(15, 15) = I33;
-
       Eigen::Matrix<double, DIM, 2*DIM> joc;
       joc.block<DIM, DIM>(0, 0) = joca;
       joc.block<DIM, DIM>(0, DIM) = jocb;
-
-      // jtj = joc.transpose() * joc;
-      // gg = joc.transpose() * rr;
 
       jtj = joc.transpose() * cov_inv * joc;
       gg = joc.transpose() * cov_inv * rr;
     }
 
-    // return rr.squaredNorm();
     return rr.dot(cov_inv * rr);
   }
 
@@ -240,13 +206,11 @@ public:
     rr.block<3, 1>(9, 0) = res_bg*b_wei;
     rr.block<3, 1>(12, 0) = res_ba*b_wei;
     
-    // rr.block<3, 1>(15, 0) = st2.g - st1.g;
     Eigen::Matrix<double, 15, 15> cov_inv = cov.inverse();
 
     if(jac_enable)
     {
       Eigen::Matrix3d JR_inv = jr_inv(res_r);
-      // joca.block<3, 3>(0, 0) = -JR_inv * st1.R.transpose() * st2.R;
       joca.block<3, 3>(0, 0) = -JR_inv * st2.R.transpose() * st1.R;
       jocb.block<3, 3>(0, 0) =  JR_inv;
       joca.block<3, 3>(0, 9) = -JR_inv * res_r.transpose() * jr(R_bg*dbg) * R_bg;
@@ -269,11 +233,6 @@ public:
       jocb.block<3, 3>(9, 9) = I33*b_wei;
       jocb.block<3, 3>(12, 12) = I33*b_wei;
 
-      // joca.block<3, 3>(3, 15) = -0.5 * st1.R.transpose() * dtime * dtime;
-      // joca.block<3, 3>(6, 15) = -st1.R.transpose() * dtime;
-      // joca.block<3, 3>(15, 15) = -I33;
-      // jocb.block<3, 3>(15, 15) = I33;
-
       jocg.block<3, 3>(3, 0) = st1.R.transpose() * (-0.5*dtime*dtime);
       jocg.block<3, 3>(6, 0) = st1.R.transpose() * (-dtime);
 
@@ -282,14 +241,10 @@ public:
       joc.block<DIM, DIM>(0, DIM) = jocb;
       joc.block<DIM, 3>(0, 2*DIM) = jocg;
 
-      // jtj = joc.transpose() * joc;
-      // gg = joc.transpose() * rr;
-
       jtj = joc.transpose() * cov_inv * joc;
       gg = joc.transpose() * cov_inv * rr;
     }
 
-    // return rr.squaredNorm();
     return rr.dot(cov_inv * rr);
   }
 
@@ -329,4 +284,3 @@ public:
   }
 
 };
-

@@ -7,8 +7,9 @@
 #include <Eigen/Eigenvalues>
 #include <unordered_set>
 #include <mutex>
+#include <chrono>
 
-#include <ros/ros.h>
+#include <rclcpp/rclcpp.hpp>
 #include <fstream>
 
 struct pointVar 
@@ -80,18 +81,17 @@ struct Plane
 
 };
 
-Eigen::Vector4d min_point;
-double min_eigen_value;
-int max_layer = 2;
-int max_points = 100;
-double voxel_size = 1.0;
-int min_ba_point = 20;
-vector<double> plane_eigen_value_thre;
+extern Eigen::Vector4d min_point;
+extern double min_eigen_value;
+extern int max_layer;
+extern int max_points;
+extern double voxel_size;
+extern int min_ba_point;
+extern vector<double> plane_eigen_value_thre;
 
 void Bf_var(const pointVar &pv, Eigen::Matrix<double, 9, 9> &bcov, const Eigen::Vector3d &vec)
 {
   Eigen::Matrix<double, 6, 3> Bi;
-  // Eigen::Vector3d &vec = pv.world;
   Bi << 2*vec(0),        0,        0,
           vec(1),   vec(0),        0,
           vec(2),        0,   vec(0),
@@ -105,7 +105,6 @@ void Bf_var(const pointVar &pv, Eigen::Matrix<double, 9, 9> &bcov, const Eigen::
   bcov.block<3, 3>(6, 6) = pv.var;
 }
 
-// The LiDAR BA factor in optimization
 class LidarFactor
 {
 public:
@@ -132,7 +131,6 @@ public:
   void acc_evaluate2(const vector<IMUST> &xs, int head, int end, Eigen::MatrixXd &Hess, Eigen::VectorXd &JacT, double &residual)
   {
     Hess.setZero(); JacT.setZero(); residual = 0;
-    vector<PointCluster> sig_tran(win_size);
     const int kk = 0;
 
     PLV(3) viRiTuk(win_size);
@@ -143,22 +141,8 @@ public:
 
     for(int a=head; a<end; a++)
     {
-      vector<PointCluster> &sig_orig = plvec_voxels[a];
+      const vector<PointCluster> &sig_orig = plvec_voxels[a];
       double coe = coeffs[a];
-
-      // PointCluster sig = sig_vecs[a];
-      // for(int i=0; i<win_size; i++)
-      // if(sig_orig[i].N != 0)
-      // {
-      //   sig_tran[i].transform(sig_orig[i], xs[i]);
-      //   sig += sig_tran[i];
-      // }
-      
-      // const Eigen::Vector3d &vBar = sig.v / sig.N;
-      // Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> saes(sig.P/sig.N - vBar * vBar.transpose());
-      // const Eigen::Vector3d &lmbd = saes.eigenvalues();
-      // const Eigen::Matrix3d &U = saes.eigenvectors();
-      // int NN = sig.N;
 
       Eigen::Vector3d lmbd = eig_values[a];
       Eigen::Matrix3d U = eig_vectors[a];
@@ -174,7 +158,6 @@ public:
           umumT += 2.0/(lmbd[kk] - lmbd[i]) * u[i] * u[i].transpose();
 
       for(int i=0; i<win_size; i++)
-      // for(int i=1; i<win_size; i++)
       if(sig_orig[i].N != 0)
       {
         Eigen::Matrix3d Pi = sig_orig[i].P;
@@ -213,7 +196,6 @@ public:
       }
 
       for(int i=0; i<win_size-1; i++)
-      // for(int i=1; i<win_size-1; i++)
       if(sig_orig[i].N != 0)
       {
         double ni = sig_orig[i].N;
@@ -243,10 +225,7 @@ public:
   void evaluate_only_residual(const vector<IMUST> &xs, int head, int end, double &residual)
   {
     residual = 0;
-    // vector<PointCluster> sig_tran(win_size);
-    int kk = 0; // The kk-th lambda value
-
-    // int gps_size = plvec_voxels.size();
+    int kk = 0;
     PointCluster pcr;
 
     for(int a=head; a<end; a++)
@@ -262,16 +241,12 @@ public:
       }
 
       Eigen::Vector3d vBar = sig.v / sig.N;
-      // Eigen::Matrix3d cmt = sig.P/sig.N - vBar * vBar.transpose();
-      // Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> saes(sig.P - sig.v * vBar.transpose());
       Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> saes(sig.P/sig.N - vBar * vBar.transpose());
       Eigen::Vector3d lmbd = saes.eigenvalues();
 
-      // centers[a] = vBar;
       eig_values[a] = saes.eigenvalues();
       eig_vectors[a] = saes.eigenvectors();
       pcr_adds[a] = sig;
-      // Ns[a] = sig.N;
 
       residual += coeffs[a] * lmbd[kk];
     }
@@ -289,7 +264,6 @@ public:
 
 };
 
-// The LM optimizer for LiDAR BA
 class Lidar_BA_Optimizer
 {
 public:
@@ -297,7 +271,6 @@ public:
 
   double divide_thread(vector<IMUST> &x_stats, LidarFactor &voxhess, Eigen::MatrixXd &Hess, Eigen::VectorXd &JacT)
   {
-    // int thd_num = 4;
     double residual = 0;
     Hess.setZero(); JacT.setZero();
     PLM(-1) hessians(thd_num); 
@@ -316,19 +289,18 @@ public:
 
     vector<thread*> mthreads(tthd_num);
     double part = 1.0 * g_size / tthd_num;
-    // for(int i=0; i<tthd_num; i++)
     for(int i=1; i<tthd_num; i++)
-      mthreads[i] = new thread(&LidarFactor::acc_evaluate2, &voxhess, x_stats, part*i, part*(i+1), ref(hessians[i]), ref(jacobins[i]), ref(resis[i]));
+      mthreads[i] = new thread(&LidarFactor::acc_evaluate2, &voxhess, x_stats, (int)(part*i), (int)(part*(i+1)), ref(hessians[i]), ref(jacobins[i]), ref(resis[i]));
 
     for(int i=0; i<tthd_num; i++)
     {
       if(i != 0) mthreads[i]->join();
       else
-        voxhess.acc_evaluate2(x_stats, 0, part, hessians[0], jacobins[0], resis[0]);
+        voxhess.acc_evaluate2(x_stats, 0, (int)part, hessians[0], jacobins[0], resis[0]);
       Hess += hessians[i];
       JacT += jacobins[i];
       residual += resis[i];
-      delete mthreads[i];
+      if (i != 0) delete mthreads[i];
     }
 
     return residual;
@@ -337,28 +309,25 @@ public:
   double only_residual(vector<IMUST> &x_stats, LidarFactor &voxhess)
   {
     double residual1 = 0;
-    // voxhess.evaluate_only_residual(x_stats, 0, voxhess.plvec_voxels.size(), residual1);
-
-    // int thd_num = 2;
     vector<double> residuals(thd_num, 0);
     int g_size = voxhess.plvec_voxels.size();
     if(g_size < thd_num)
     {
-      printf("Too Less Voxel"); exit(0);
+      thd_num = 1;
     }
     vector<thread*> mthreads(thd_num, nullptr);
     double part = 1.0 * g_size / thd_num;
     for(int i=1; i<thd_num; i++)
-      mthreads[i] = new thread(&LidarFactor::evaluate_only_residual, &voxhess, x_stats, part*i, part*(i+1), ref(residuals[i]));
+      mthreads[i] = new thread(&LidarFactor::evaluate_only_residual, &voxhess, x_stats, (int)(part*i), (int)(part*(i+1)), ref(residuals[i]));
 
     for(int i=0; i<thd_num; i++)
     {
       if(i != 0) 
         mthreads[i]->join();
       else
-        voxhess.evaluate_only_residual(x_stats, part*i, part*(i+1), residuals[i]);
+        voxhess.evaluate_only_residual(x_stats, 0, (int)part, residuals[i]);
       residual1 += residuals[i];
-      delete mthreads[i];
+      if (i != 0) delete mthreads[i];
     }
 
     return residual1;
@@ -381,8 +350,6 @@ public:
 
     bool is_converge = true;
 
-    // double tt1 = ros::Time::now().toSec();
-    // for(int i=0; i<10; i++)
     for(int i=0; i<max_iter; i++)
     {
       if(is_calc_hess)
@@ -443,10 +410,8 @@ public:
 
 };
 
-double imu_coef = 1e-4;
-// double imu_coef = 1e-8;
+extern double imu_coef;
 #define DVEL 6
-// The LiDAR-Inertial BA optimizer
 class LI_BA_Optimizer
 {
 public:
@@ -483,9 +448,8 @@ public:
     double part = 1.0 * g_size / tthd_num;
 
     vector<thread*> mthreads(tthd_num);
-    // for(int i=0; i<tthd_num; i++)
     for(int i=1; i<tthd_num; i++)
-      mthreads[i] = new thread(&LidarFactor::acc_evaluate2, &voxhess, x_stats, part*i, part * (i+1), ref(hessians[i]), ref(jacobins[i]), ref(resis[i]));
+      mthreads[i] = new thread(&LidarFactor::acc_evaluate2, &voxhess, x_stats, (int)(part*i), (int)(part * (i+1)), ref(hessians[i]), ref(jacobins[i]), ref(resis[i]));
 
     Eigen::MatrixXd jtj(2*DIM, 2*DIM);
     Eigen::VectorXd gg(2*DIM);
@@ -498,25 +462,18 @@ public:
       JacT.block<DIM*2, 1>(i*DIM, 0) += gg;
     }
 
-    Eigen::Matrix<double, DIM, DIM> joc;
-    Eigen::Matrix<double, DIM, 1> rr;
-    joc.setIdentity(); rr.setZero();
-
     Hess *= imu_coef;
     JacT *= imu_coef;
     residual *= (imu_coef * 0.5);
 
-    // printf("resi: %lf\n", residual);
-
     for(int i=0; i<tthd_num; i++)
     {
-      // mthreads[i]->join();
       if(i != 0) mthreads[i]->join();
       else
-        voxhess.acc_evaluate2(x_stats, 0, part, hessians[0], jacobins[0], resis[0]);
+        voxhess.acc_evaluate2(x_stats, 0, (int)part, hessians[0], jacobins[0], resis[0]);
       hess_plus(Hess, JacT, hessians[i], jacobins[i]);
       residual += resis[i];
-      delete mthreads[i];
+      if (i != 0) delete mthreads[i];
     }
 
     return residual;
@@ -533,13 +490,12 @@ public:
     int g_size = voxhess.plvec_voxels.size();
     if(g_size < thd_num)
     {
-      // printf("Too Less Voxel"); exit(0);
       thd_num = 1;
     }
     vector<thread*> mthreads(thd_num, nullptr);
     double part = 1.0 * g_size / thd_num;
     for(int i=1; i<thd_num; i++)
-      mthreads[i] = new thread(&LidarFactor::evaluate_only_residual, &voxhess, x_stats, part*i, part*(i+1), ref(residuals[i]));
+      mthreads[i] = new thread(&LidarFactor::evaluate_only_residual, &voxhess, x_stats, (int)(part*i), (int)(part*(i+1)), ref(residuals[i]));
 
     for(int i=0; i<win_size-1; i++)
       residual1 += imus_factor[i]->give_evaluate(x_stats[i], x_stats[i+1], jtj, gg, false);
@@ -552,7 +508,7 @@ public:
         mthreads[i]->join(); delete mthreads[i];
       }
       else
-        voxhess.evaluate_only_residual(x_stats, part*i, part*(i+1), residuals[i]);
+        voxhess.evaluate_only_residual(x_stats, 0, (int)part, residuals[i]);
       residual2 += residuals[i];
     }
 
@@ -574,17 +530,11 @@ public:
     bool is_calc_hess = true;
     vector<IMUST> x_stats_temp = x_stats;
 
-    double hesstime = 0;
-    double resitime = 0;
-  
-    // for(int i=0; i<10; i++)
     for(int i=0; i<3; i++)
     {
       if(is_calc_hess)
       {
-        double tm = ros::Time::now().toSec();
         residual1 = divide_thread(x_stats, voxhess, imus_factor, Hess, JacT);
-        hesstime += ros::Time::now().toSec() - tm;
         *hess = Hess;
       }
       
@@ -610,14 +560,9 @@ public:
 
       double q1 = 0.5 * dxi.dot(u*D*dxi-JacT);
 
-      double tl1 = ros::Time::now().toSec();
       residual2 = only_residual(x_stats_temp, voxhess, imus_factor);
-      double tl2 = ros::Time::now().toSec();
-      // printf("onlyresi: %lf\n", tl2-tl1);
-      resitime += tl2 - tl1;
 
       q = (residual1-residual2);
-      // printf("iter%d: (%lf %lf) u: %lf v: %.1lf q: %.2lf %lf %lf\n", i, residual1, residual2, u, v, q/q1, q1, q);
 
       if(q > 0)
       {
@@ -648,13 +593,10 @@ public:
         break;
     }
 
-    // printf("ba: %lf %lf %zu\n", hesstime, resitime, voxhess.plvec_voxels.size());
-
   }
 
 };
 
-// The LiDAR-Inertial BA optimizer with gravity optimization
 class LI_BA_OptimizerGravity
 {
 public:
@@ -691,9 +633,8 @@ public:
     double part = 1.0 * g_size / tthd_num;
 
     vector<thread*> mthreads(tthd_num);
-    // for(int i=0; i<tthd_num; i++)
     for(int i=1; i<tthd_num; i++)
-      mthreads[i] = new thread(&LidarFactor::acc_evaluate2, &voxhess, x_stats, part*i, part * (i+1), ref(hessians[i]), ref(jacobins[i]), ref(resis[i]));
+      mthreads[i] = new thread(&LidarFactor::acc_evaluate2, &voxhess, x_stats, (int)(part*i), (int)(part * (i+1)), ref(hessians[i]), ref(jacobins[i]), ref(resis[i]));
 
     Eigen::MatrixXd jtj(2*DIM+3, 2*DIM+3);
     Eigen::VectorXd gg(2*DIM+3);
@@ -711,25 +652,18 @@ public:
       JacT.tail(3) += gg.tail(3);
     }
 
-    Eigen::Matrix<double, DIM, DIM> joc;
-    Eigen::Matrix<double, DIM, 1> rr;
-    joc.setIdentity(); rr.setZero();
-
     Hess *= imu_coef;
     JacT *= imu_coef;
     residual *= (imu_coef * 0.5);
 
-    // printf("resi: %lf\n", residual);
-
     for(int i=0; i<tthd_num; i++)
     {
-      // mthreads[i]->join();
       if(i != 0) mthreads[i]->join();
       else
-        voxhess.acc_evaluate2(x_stats, 0, part, hessians[0], jacobins[0], resis[0]);
+        voxhess.acc_evaluate2(x_stats, 0, (int)part, hessians[0], jacobins[0], resis[0]);
       hess_plus(Hess, JacT, hessians[i], jacobins[i]);
       residual += resis[i];
-      delete mthreads[i];
+      if (i != 0) delete mthreads[i];
     }
 
     return residual;
@@ -746,13 +680,12 @@ public:
     int g_size = voxhess.plvec_voxels.size();
     if(g_size < thd_num)
     {
-      // printf("Too Less Voxel"); exit(0);
       thd_num = 1;
     }
     vector<thread*> mthreads(thd_num, nullptr);
     double part = 1.0 * g_size / thd_num;
     for(int i=1; i<thd_num; i++)
-      mthreads[i] = new thread(&LidarFactor::evaluate_only_residual, &voxhess, x_stats, part*i, part*(i+1), ref(residuals[i]));
+      mthreads[i] = new thread(&LidarFactor::evaluate_only_residual, &voxhess, x_stats, (int)(part*i), (int)(part*(i+1)), ref(residuals[i]));
 
     for(int i=0; i<win_size-1; i++)
       residual1 += imus_factor[i]->give_evaluate_g(x_stats[i], x_stats[i+1], jtj, gg, false);
@@ -765,7 +698,7 @@ public:
         mthreads[i]->join(); delete mthreads[i];
       }
       else
-        voxhess.evaluate_only_residual(x_stats, part*i, part*(i+1), residuals[i]);
+        voxhess.evaluate_only_residual(x_stats, 0, (int)part, residuals[i]);
       residual2 += residuals[i];
     }
 
@@ -802,11 +735,6 @@ public:
       Hess.block<6, 6>(0, 0).setIdentity();
       JacT.head(6).setZero();
 
-      // Hess.rightCols(3).setZero();
-      // Hess.bottomRows(3).setZero();
-      // Hess.block<3, 3>(imu_leng-3, imu_leng-3).setIdentity();
-      // JacT.tail(3).setZero();
-
       D.diagonal() = Hess.diagonal();
       dxi = (Hess + u*D).ldlt().solve(-JacT);
 
@@ -827,7 +755,6 @@ public:
       double q1 = 0.5 * dxi.dot(u*D*dxi-JacT);
       residual2 = only_residual(x_stats_temp, voxhess, imus_factor);
       q = (residual1-residual2);
-      // printf("iter%d: (%lf %lf) u: %lf v: %.1lf q: %.2lf %lf %lf\n", i, residual1, residual2, u, v, q/q1, q1, q);
       
       if(q > 0)
       {
@@ -863,7 +790,6 @@ public:
 
 };
 
-// 10 scans merge into a keyframe
 struct Keyframe
 {
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
@@ -892,7 +818,6 @@ struct Keyframe
 
 };
 
-// The sldingwindow in each voxel nodes
 class SlideWindow
 {
 public:
@@ -910,7 +835,7 @@ public:
 
   void resize(int wdsize)
   {
-    if(points.size() != wdsize)
+    if((int)points.size() != wdsize)
     {
       points.resize(wdsize);
       pcrs_local.resize(wdsize);
@@ -929,9 +854,7 @@ public:
 
 };
 
-// The octotree map for odometry and local mapping
-// You can re-write it in your own project
-int* mp;
+extern int* mp;
 class OctoTree
 {
 public:
@@ -962,8 +885,6 @@ public:
   {
     for(int i=0; i<8; i++) leaves[i] = nullptr;
     cov_add.setZero();
-
-    // ins = 255.0*rand()/(RAND_MAX + 1.0f);
   }
 
   inline void push(int ord, const pointVar &pv, const Eigen::Vector3d &pw, vector<SlideWindow*> &sws)
@@ -1014,7 +935,6 @@ public:
 
   inline bool plane_judge(Eigen::Vector3d &eig_values)
   {
-    // return (eig_values[0] < min_eigen_value);
     return (eig_values[0] < min_eigen_value && (eig_values[0]/eig_values[2])<plane_eigen_value_thre[layer]);
   }
 
@@ -1174,7 +1094,6 @@ public:
       if(pcr_fix.N != 0)
       {
         fix_divide(sws);
-        // point_fix.clear();
         PVec().swap(point_fix);
       }
 
@@ -1200,15 +1119,8 @@ public:
       if(!isexist || sw == nullptr) return;
       mVox.lock();
       vector<PointCluster> pcrs_world(wdsize);
-      // pcr_add = pcr_fix;
-      // for(int i=0; i<win_count; i++)
-      // if(sw->pcrs_local[mp[i]].N != 0)
-      // {
-      //   pcrs_world[i].transform(sw->pcrs_local[mp[i]], x_buf[i]);
-      //   pcr_add += pcrs_world[i];
-      // }
 
-      if(opt_state >= int(vox_opt.pcr_adds.size()))
+      if(opt_state >= (int)vox_opt.pcr_adds.size())
       {
         printf("Error: opt_state: %d %zu\n", opt_state, vox_opt.pcr_adds.size());
         exit(0);
@@ -1304,7 +1216,6 @@ public:
 
   }
 
-  // Extract the LiDAR factor
   void tras_opt(LidarFactor &vox_opt)
   {
     if(octo_state == 0)
@@ -1351,15 +1262,9 @@ public:
           sigma_l += plane.normal.transpose() * var_wld * plane.normal;
           if(dis_to_plane < 3 * sqrt(sigma_l))
           {
-            // float prob = 1 / (sqrt(sigma_l)) * exp(-0.5 * dis_to_plane * dis_to_plane / sigma_l);
-            // if(prob > max_prob)
-            {
-              oc = this;
-              sigma_d = sigma_l;
-              // max_prob = prob;
-              pla = &plane;
-            }
-
+            oc = this;
+            sigma_d = sigma_l;
+            pla = &plane;
             flag = 1;
           }
         }
@@ -1372,20 +1277,8 @@ public:
         if(wld[k] > voxel_center[k]) xyz[k] = 1;
       int leafnum = 4*xyz[0] + 2*xyz[1] + xyz[2];
 
-      // for(int i=0; i<8; i++)
-      // if(leaves[i] != nullptr)
-      // {
-      //   int flg = leaves[i]->match(wld, pla, max_prob, var_wld);
-      //   if(i == leafnum)
-      //     flag = flg;
-      // }
-
       if(leaves[leafnum] != nullptr)
         flag = leaves[leafnum]->match(wld, pla, max_prob, var_wld, sigma_d, oc);
-
-      // for(int i=0; i<8; i++)
-      //   if(leaves[i] != nullptr)
-      //     leaves[i]->match(pv, pla, max_prob, var_wld);
     }
 
     return flag;
@@ -1404,56 +1297,18 @@ public:
     }
   }
 
-  // ~OctoTree()
-  // {
-  //   for(int i=0; i<8; i++)
-  //   if(leaves[i] != nullptr)
-  //   {
-  //     delete leaves[i];
-  //     leaves[i] = nullptr;
-  //   }
-  // }
-
-  // Extract the point cloud map for debug
-  void tras_display(int win_count, pcl::PointCloud<PointType> &pl_fixd, pcl::PointCloud<PointType> &pl_wind, vector<IMUST> &x_buf)
+  void tras_display(int win_cnt, pcl::PointCloud<PointType> &pl_fixd, pcl::PointCloud<PointType> &pl_wind, vector<IMUST> &x_buf)
   {
     if(octo_state == 0)
     {
-      Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> saes(pcr_add.cov());
-      Eigen::Matrix3d eig_vectors = saes.eigenvectors();
-      Eigen::Vector3d eig_values  = saes.eigenvalues();
-
       PointType ap; 
-      // ap.intensity = ins;
-
       if(plane.is_plane)
       {
-        // if(pcr_add.N-pcr_fix.N < min_ba_point) return;
-        // if(eig_value[0]/eig_value[1] > 0.1)
-        //   return;
-
-        // for(pointVar &pv: point_fix)
-        // {
-        //   Eigen::Vector3d pvec = pv.pnt;
-        //   ap.x = pvec[0];
-        //   ap.y = pvec[1];
-        //   ap.z = pvec[2];
-        //   ap.normal_x = sqrt(eig_values[0]);
-        //   ap.normal_y = sqrt(eig_values[2] / eig_values[0]);
-        //   ap.normal_z = pcr_add.N;
-        //   ap.curvature = pcr_add.N - pcr_fix.N;
-        //   pl_fixd.push_back(ap);
-        // }
-
-        for(int i=0; i<win_count; i++)
+        for(int i=0; i<win_cnt; i++)
         for(pointVar &pv: sw->points[mp[i]])
         {
           Eigen::Vector3d pvec = x_buf[i].R * pv.pnt + x_buf[i].p;
           ap.x = pvec[0]; ap.y = pvec[1]; ap.z = pvec[2];
-          // ap.normal_x = sqrt(eig_values[0]);
-          // ap.normal_y = sqrt(eig_values[2] / eig_values[0]);
-          // ap.normal_z = pcr_add.N;
-          // ap.curvature = pcr_add.N - pcr_fix.N;
           pl_wind.push_back(ap);
         }
       }
@@ -1463,7 +1318,7 @@ public:
     {
       for(int i=0; i<8; i++)
         if(leaves[i] != nullptr)
-          leaves[i]->tras_display(win_count, pl_fixd, pl_wind, x_buf);
+          leaves[i]->tras_display(win_cnt, pl_fixd, pl_wind, x_buf);
     }
 
   }
@@ -1503,7 +1358,7 @@ public:
 
 void cut_voxel(unordered_map<VOXEL_LOC, OctoTree*> &feat_map, PVecPtr pvec, int win_count, unordered_map<VOXEL_LOC, OctoTree*> &feat_tem_map, int wdsize, PLV(3) &pwld, vector<SlideWindow*> &sws)
 {
-  int plsize = pvec->size();
+  int plsize = (int)pvec->size();
   for(int i=0; i<plsize; i++)
   {
     pointVar &pv = (*pvec)[i];
@@ -1515,7 +1370,7 @@ void cut_voxel(unordered_map<VOXEL_LOC, OctoTree*> &feat_map, PVecPtr pvec, int 
       if(loc[j] < 0) loc[j] -= 1;
     }
 
-    VOXEL_LOC position(loc[0], loc[1], loc[2]);
+    VOXEL_LOC position((int64_t)loc[0], (int64_t)loc[1], (int64_t)loc[2]);
     auto iter = feat_map.find(position);
     if(iter != feat_map.end())
     {
@@ -1539,24 +1394,21 @@ void cut_voxel(unordered_map<VOXEL_LOC, OctoTree*> &feat_map, PVecPtr pvec, int 
   
 }
 
-// Cut the current scan into corresponding voxel in multi thread
 void cut_voxel_multi(unordered_map<VOXEL_LOC, OctoTree*> &feat_map, PVecPtr pvec, int win_count, unordered_map<VOXEL_LOC, OctoTree*> &feat_tem_map, int wdsize, PLV(3) &pwld, vector<vector<SlideWindow*>> &sws)
 {
   unordered_map<OctoTree*, vector<int>> map_pvec;
-  int plsize = pvec->size();
+  int plsize = (int)pvec->size();
   for(int i=0; i<plsize; i++)
   {
-    pointVar &pv = (*pvec)[i];
     Eigen::Vector3d &pw = pwld[i];
     float loc[3];
     for(int j=0; j<3; j++)
     {
-      // loc[j] = pv.world[j] / voxel_size;
       loc[j] = pw[j] / voxel_size;
       if(loc[j] < 0) loc[j] -= 1;
     }
 
-    VOXEL_LOC position(loc[0], loc[1], loc[2]);
+    VOXEL_LOC position((int64_t)loc[0], (int64_t)loc[1], (int64_t)loc[2]);
     auto iter = feat_map.find(position);
     OctoTree* ot = nullptr;
     if(iter != feat_map.end())
@@ -1580,20 +1432,12 @@ void cut_voxel_multi(unordered_map<VOXEL_LOC, OctoTree*> &feat_map, PVecPtr pvec
     map_pvec[ot].push_back(i);
   }
 
-  // for(auto iter=map_pvec.begin(); iter!=map_pvec.end(); iter++)
-  // {
-  //   for(int i: iter->second)
-  //   {
-  //     iter->first->allocate(win_count, (*pvec)[i], pwld[i], sws);
-  //   }
-  // }
-
   vector<pair<OctoTree *const, vector<int>>*> octs; octs.reserve(map_pvec.size());
   for(auto iter=map_pvec.begin(); iter!=map_pvec.end(); iter++)
     octs.push_back(&(*iter));
 
   int thd_num = sws.size();
-  int g_size = octs.size();
+  int g_size = (int)octs.size();
   if(g_size < thd_num) return;
   vector<thread*> mthreads(thd_num);
   double part = 1.0 * g_size / thd_num;
@@ -1616,7 +1460,7 @@ void cut_voxel_multi(unordered_map<VOXEL_LOC, OctoTree*> &feat_map, PVecPtr pvec
           for(int k: octs[j]->second)
             octs[j]->first->allocate(win_count, (*pvec)[k], pwld[k], sw);
         }
-      }, part*i, part*(i+1), ref(sws[i])
+      }, (int)(part*i), (int)(part*(i+1)), ref(sws[i])
     );
   }
 
@@ -1624,7 +1468,7 @@ void cut_voxel_multi(unordered_map<VOXEL_LOC, OctoTree*> &feat_map, PVecPtr pvec
   {
     if(i == 0)
     {
-      for(int j=0; j<int(part); j++)
+      for(int j=0; j<(int)part; j++)
         for(int k: octs[j]->second)
           octs[j]->first->allocate(win_count, (*pvec)[k], pwld[k], sws[0]);
     }
@@ -1649,7 +1493,7 @@ void cut_voxel(unordered_map<VOXEL_LOC, OctoTree*> &feat_map, PVec &pvec, int wd
       if(loc[j] < 0) loc[j] -= 1;
     }
 
-    VOXEL_LOC position(loc[0], loc[1], loc[2]);
+    VOXEL_LOC position((int64_t)loc[0], (int64_t)loc[1], (int64_t)loc[2]);
     auto iter = feat_map.find(position);
     if(iter != feat_map.end())
     {
@@ -1670,7 +1514,6 @@ void cut_voxel(unordered_map<VOXEL_LOC, OctoTree*> &feat_map, PVec &pvec, int wd
   
 }
 
-// Match the point with the plane in the voxel map
 int match(unordered_map<VOXEL_LOC, OctoTree*> &feat_map, Eigen::Vector3d &wld, Plane* &pla, Eigen::Matrix3d &var_wld, double &sigma_d, OctoTree* &oc)
 {
   int flag = 0;
@@ -1681,17 +1524,12 @@ int match(unordered_map<VOXEL_LOC, OctoTree*> &feat_map, Eigen::Vector3d &wld, P
     loc[j] = wld[j] / voxel_size;
     if(loc[j] < 0) loc[j] -= 1;
   }
-  VOXEL_LOC position(loc[0], loc[1], loc[2]);
+  VOXEL_LOC position((int64_t)loc[0], (int64_t)loc[1], (int64_t)loc[2]);
   auto iter = feat_map.find(position);
   if(iter != feat_map.end())
   {
     double max_prob = 0;
     flag = iter->second->match(wld, pla, max_prob, var_wld, sigma_d, oc);
-    // iter->second->match_end(pv, pla, max_prob);
-    if(flag && pla==nullptr)
-    {
-      printf("pla null max_prob: %lf %ld %ld %ld\n", max_prob, iter->first.x, iter->first.y, iter->first.z);
-    }
   }
 
   return flag;

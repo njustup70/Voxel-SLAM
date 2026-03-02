@@ -149,6 +149,18 @@ struct IMUST
     setZero();
   }
 
+  IMUST(const IMUST &b)
+  {
+    this->R = b.R;
+    this->p = b.p;
+    this->v = b.v;
+    this->bg = b.bg;
+    this->ba = b.ba;
+    this->g = b.g;
+    this->t = b.t;
+    this->cov = b.cov;
+  }
+
   IMUST(double _t, const Eigen::Matrix3d &_R, const Eigen::Vector3d &_p, const Eigen::Vector3d &_v, const Eigen::Vector3d &_bg, const Eigen::Vector3d &_ba, const Eigen::Vector3d &_g = Eigen::Vector3d(0, 0, -G_m_s2)) : t(_t), R(_R), p(_p), v(_v), bg(_bg), ba(_ba), g(_g) {}
 
   IMUST &operator+=(const Eigen::Matrix<double, DIM, 1> &ist)

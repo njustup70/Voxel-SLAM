@@ -1,7 +1,8 @@
 #include "BTC.h"
 
-void read_parameters(ros::NodeHandle &nh, ConfigSetting &config_setting, int isHighFly)
+void read_parameters(rclcpp::Node::SharedPtr nh, ConfigSetting &config_setting, int isHighFly)
 {
+  (void)nh;
   if(!isHighFly)
   {
     config_setting.useful_corner_num_ = 100;
