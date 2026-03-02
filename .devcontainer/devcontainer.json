@@ -1,0 +1,31 @@
+{
+    "name": "slam_container",
+    "dockerComposeFile": "docker-compose.yml",
+    "service": "slam_service",
+    "workspaceFolder": "/home/Elaina/ros2_ws",
+    "shutdownAction": "stopCompose",
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "twxs.cmake",
+                "josetr.cmake-language-support-vscode",
+                "llvm-vs-code-extensions.vscode-clangd",
+                "ms-vscode.cmake-tools",
+                "cschlosser.doxdocgen",
+                "augustocdias.tasks-shell-input",
+                "ms-vscode.cpptools",
+                "ms-python.python",
+                "njpwerner.autodocstring",
+                "vadimcn.vscode-lldb",
+                "llvm-vs-code-extensions.lldb-dap",
+                "ms-python.vscode-pylance",
+                "ms-azuretools.vscode-containers",
+                "mhutchie.git-graph",
+                "donjayamanne.githistory"
+            ]
+        },
+        "jetbrains": {
+            "extensions": []
+        }
+    }
+}
