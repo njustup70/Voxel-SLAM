@@ -24,6 +24,9 @@ PointCloud2Display::~PointCloud2Display() = default;
 
 void PointCloud2Display::onInitialize()
 {
+  // Initialize the message filter display with a specific QoS for Best Effort
+  // By default, rviz_common::MessageFilterDisplay uses the QoS provided by the display properties.
+  // We call MFDClass::onInitialize() which sets up the subscription.
   MFDClass::onInitialize();
   point_cloud_common_->initialize(context_, scene_node_);
 }
@@ -34,9 +37,9 @@ void PointCloud2Display::processMessage(sensor_msgs::msg::PointCloud2::ConstShar
   
   int xi = -1, yi = -1, zi = -1;
   for (size_t i = 0; i < cloud->fields.size(); ++i) {
-    if (cloud->fields[i].name == "x") xi = i;
-    else if (cloud->fields[i].name == "y") yi = i;
-    else if (cloud->fields[i].name == "z") zi = i;
+    if (cloud->fields[i].name == "x") xi = (int)i;
+    else if (cloud->fields[i].name == "y") yi = (int)i;
+    else if (cloud->fields[i].name == "z") zi = (int)i;
   }
 
   if (xi == -1 || yi == -1 || zi == -1) {

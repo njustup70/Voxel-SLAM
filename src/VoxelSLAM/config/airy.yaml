@@ -5,18 +5,18 @@ voxelslam:
       imu_topic: "/livox/imu"
       save_path: "/home/zale/save_datas/"
       previous_map: ""
-      bagname: "avia_init"
-      lidar_type: 0
-      blind: 0.1
+      bagname: "mid360_init"
+      lidar_type: 4
+      blind: 0.5
       point_filter_num: 3
-      extrinsic_tran: [0.04165, 0.02326, -0.0284]
+      extrinsic_tran: [0.0, 0.0, 0.0]
       extrinsic_rota: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
       is_save_map: 0
 
     odometry:
       max_init: 30
       cov_gyr: 0.1
-      cov_acc: 0.1
+      cov_acc: 1.0
       rdw_gyr: 0.0001
       rdw_acc: 0.0001
       down_size: 0.1
@@ -30,22 +30,22 @@ voxelslam:
     local_ba:
       win_size: 10
       max_layer: 2
-      cov_gyr: 0.1
-      cov_acc: 0.1
+      cov_gyr: 0.01
+      cov_acc: 2.0
       rdw_gyr: 0.0001
       rdw_acc: 0.0001
-      min_ba_point: 20
-      plane_eigen_value_thre: [1.0, 1.0, 1.0, 1.0]
-      imu_coef: 0.0001
+      min_ba_point: 1
+      plane_eigen_value_thre: [4.0, 4.0, 4.0, 4.0]
+      imu_coef: 0.0002
       thread_num: 5
 
     loop:
       jud_default: 0.45
-      icp_eigval: 14.0
-      ratio_drift: 0.05
+      icp_eigval: 9.0
+      ratio_drift: 0.01
 
     gba:
-      voxel_size: 1.0
+      voxel_size: 2.0
       min_eigen_value: 0.01
-      eigen_value_array: [1.0, 1.0, 1.0, 1.0]
-      total_max_iter: 1
+      eigen_value_array: [4.0, 4.0, 4.0, 4.0]
+      total_max_iter: 6

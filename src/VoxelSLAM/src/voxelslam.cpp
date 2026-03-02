@@ -2681,13 +2681,18 @@ int main(int argc, char **argv)
   rclcpp::init(argc, argv);
   auto node = std::make_shared<rclcpp::Node>("cmn_voxel");
 
-  pub_cmap = node->create_publisher<sensor_msgs::msg::PointCloud2>("/map_cmap", 100);
-  pub_pmap = node->create_publisher<sensor_msgs::msg::PointCloud2>("/map_pmap", 100);
-  pub_scan = node->create_publisher<sensor_msgs::msg::PointCloud2>("/map_scan", 100);
-  pub_init = node->create_publisher<sensor_msgs::msg::PointCloud2>("/map_init", 100);
-  pub_test = node->create_publisher<sensor_msgs::msg::PointCloud2>("/map_test", 100);
-  pub_curr_path = node->create_publisher<sensor_msgs::msg::PointCloud2>("/map_path", 100);
-  pub_prev_path = node->create_publisher<sensor_msgs::msg::PointCloud2>("/map_true", 100);
+  // Reliable QoS for publishers (Maps, Trajectories)
+  auto pub_qos = rclcpp::SystemDefaultsQoS();
+  // Best Effort QoS for sensor data subscribers
+  auto sub_qos = rclcpp::SensorDataQoS();
+
+  pub_cmap = node->create_publisher<sensor_msgs::msg::PointCloud2>("/map_cmap", pub_qos);
+  pub_pmap = node->create_publisher<sensor_msgs::msg::PointCloud2>("/map_pmap", pub_qos);
+  pub_scan = node->create_publisher<sensor_msgs::msg::PointCloud2>("/map_scan", pub_qos);
+  pub_init = node->create_publisher<sensor_msgs::msg::PointCloud2>("/map_init", pub_qos);
+  pub_test = node->create_publisher<sensor_msgs::msg::PointCloud2>("/map_test", pub_qos);
+  pub_curr_path = node->create_publisher<sensor_msgs::msg::PointCloud2>("/map_path", pub_qos);
+  pub_prev_path = node->create_publisher<sensor_msgs::msg::PointCloud2>("/map_true", pub_qos);
   
   ResultOutput::instance().set_node(node);
 
@@ -2700,7 +2705,7 @@ int main(int argc, char **argv)
   node->get_parameter("general.lid_topic", lid_topic);
   node->get_parameter("general.imu_topic", imu_topic);
 
-  auto sub_imu = node->create_subscription<sensor_msgs::msg::Imu>(imu_topic, 80000, imu_handler);
+  auto sub_imu = node->create_subscription<sensor_msgs::msg::Imu>(imu_topic, sub_qos, imu_handler);
   
   int lidar_type;
   node->get_parameter("general.lidar_type", lidar_type);
@@ -2709,9 +2714,9 @@ int main(int argc, char **argv)
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_pcl_std;
 
   if(lidar_type == 0) // LIVOX
-    sub_pcl_livox = node->create_subscription<livox_ros_driver2::msg::CustomMsg>(lid_topic, 1000, pcl_handler_livox);
+    sub_pcl_livox = node->create_subscription<livox_ros_driver2::msg::CustomMsg>(lid_topic, sub_qos, pcl_handler_livox);
   else
-    sub_pcl_std = node->create_subscription<sensor_msgs::msg::PointCloud2>(lid_topic, 1000, pcl_handler_standard);
+    sub_pcl_std = node->create_subscription<sensor_msgs::msg::PointCloud2>(lid_topic, sub_qos, pcl_handler_standard);
 
   thread thread_loop(&VOXEL_SLAM::thd_loop_closure, &vs);
   thread thread_gba(&VOXEL_SLAM::thd_globalmapping, &vs);

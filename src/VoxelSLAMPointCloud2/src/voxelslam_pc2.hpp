@@ -22,6 +22,7 @@ public:
 protected:
   void processMessage(sensor_msgs::msg::PointCloud2::ConstSharedPtr cloud) override;
 
+  // Use the common point cloud implementation for rendering
   std::unique_ptr<rviz_default_plugins::PointCloudCommon> point_cloud_common_;
 };
 
