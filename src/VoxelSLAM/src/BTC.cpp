@@ -1407,8 +1407,8 @@ void STDescManager::triangle_solver(std::pair<STD, STD> &std_pair,
   ref.col(1) = std_pair.second.binary_B_.location_ - std_pair.second.center_;
   ref.col(2) = std_pair.second.binary_C_.location_ - std_pair.second.center_;
   Eigen::Matrix3d covariance = src * ref.transpose();
-  Eigen::JacobiSVD<Eigen::Matrix3d> svd(covariance, Eigen::ComputeThinU |
-                                                        Eigen::ComputeThinV);
+  Eigen::JacobiSVD<Eigen::Matrix3d> svd(covariance, Eigen::ComputeFullU |
+                                                        Eigen::ComputeFullV);
   Eigen::Matrix3d V = svd.matrixV();
   Eigen::Matrix3d U = svd.matrixU();
   rot = V * U.transpose();
