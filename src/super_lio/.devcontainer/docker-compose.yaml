@@ -13,6 +13,7 @@ services:
       - OMP_WAIT_POLICY=passive
       - TERM=xterm-256color
       - XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}  # 保持 X11 运行时一致
+      - ROS_LOCALHOST_ONLY=1
     volumes:
       - ${XAUTHORITY}:/root/.Xauthority
       - /tmp/.X11-unix:/tmp/.X11-unix
