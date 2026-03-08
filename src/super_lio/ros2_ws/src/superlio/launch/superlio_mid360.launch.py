@@ -11,7 +11,7 @@ def generate_launch_description():
     pkg_super_lio = get_package_share_directory('super_lio')
     mix_super_lio = get_package_share_directory('superlio')
 
-    config_yaml = os.path.join(mix_super_lio, 'config', 'mid360.yaml')
+    config_yaml = os.path.join(mix_super_lio, 'config', 'superlio_mid360.yaml')
     rviz_config_file = os.path.join(pkg_super_lio, 'rviz', 'lio.rviz')
 
     declare_rviz_arg = DeclareLaunchArgument(
