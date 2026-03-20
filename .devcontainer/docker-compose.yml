@@ -26,6 +26,7 @@ services:
     tty: true
     user: "Elaina"
     working_dir: "/home/Elaina/ros2_ws"
+    command: ["/bin/bash", "-c", "source ./install/setup.bash && ros2 launch voxel_slam vxlm_mid360.launch.py" ]
 
 volumes:
   voxel_ros2_volume:
