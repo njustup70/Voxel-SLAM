@@ -24,6 +24,7 @@ def generate_launch_description():
             executable='voxelslam',
             name='voxelslam',
             output='screen',
+            emulate_tty=True,
             parameters=[default_config_path]
         ),
         
