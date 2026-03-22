@@ -10,14 +10,14 @@ services:
       - NVIDIA_DRIVER_CAPABILITIES=all
       - OMP_WAIT_POLICY=passive
       - TERM=xterm-256color
-      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp # 使用CycloneDDS就取消注释此行
+      - RMW_IMPLEMENTATION=rmw_zenoh_cpp # 使用CycloneDDS就取消注释此行
       - ROS_LOCALHOST_ONLY=1
     volumes:
       # - ${XAUTHORITY}:/root/.Xauthority
       #可以在windows下使用WSL2的X11服务器但是需要在windows环境目录中添加WSL_X11_SOCKET环境变量
       - /dev:/dev
       # - logical_volume:/home/Elaina/logical
-      - ..:/home/Elaina/ros2_ws
+      - voxel_ros2_volume:/home/Elaina/ros2_ws
     network_mode: host
     pid: "host"
     ipc: "host"
@@ -27,3 +27,11 @@ services:
     user: "Elaina"
     working_dir: "/home/Elaina/ros2_ws"
 
+volumes:
+  voxel_ros2_volume:
+    driver: local
+    driver_opts:
+      type: none
+      device: ./..
+      o: bind
+    name: voxel_ros2_volume
