@@ -28,11 +28,11 @@ def generate_launch_description():
             parameters=[default_config_path]
         ),
         
-        Node(
-            package='rviz2',
-            executable='rviz2',
-            name='rviz2',
-            arguments=['-d', rviz_config_path],
-            condition=IfCondition(LaunchConfiguration('rviz'))
-        )
+        # Node(
+        #     package='rviz2',
+        #     executable='rviz2',
+        #     name='rviz2',
+        #     arguments=['-d', rviz_config_path],
+        #     condition=IfCondition(LaunchConfiguration('rviz'))
+        # )
     ])
