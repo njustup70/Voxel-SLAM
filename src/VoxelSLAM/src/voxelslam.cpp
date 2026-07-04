@@ -309,32 +309,36 @@ public:
 
   void set_node(rclcpp::Node::SharedPtr node) { node_ = node; }
 
-  void pub_odom_func(IMUST &xc)
+  void start_hf_publisher(int period_ms)
   {
     if (!node_) return;
-    Eigen::Quaterniond q_this(xc.R);
-    Eigen::Vector3d t_this = xc.p;
+    hf_timer_ = node_->create_wall_timer(
+        std::chrono::milliseconds(period_ms),
+        std::bind(&ResultOutput::hf_timer_callback, this));
+  }
 
-    static std::shared_ptr<tf2_ros::TransformBroadcaster> br = std::make_shared<tf2_ros::TransformBroadcaster>(node_);
-    
-    geometry_msgs::msg::TransformStamped transformStamped;
-    transformStamped.header.stamp = node_->now();
-    transformStamped.header.frame_id = "camera_init";
-    transformStamped.child_frame_id = "aft_mapped";
-    transformStamped.transform.translation.x = t_this.x();
-    transformStamped.transform.translation.y = t_this.y();
-    transformStamped.transform.translation.z = t_this.z();
-    transformStamped.transform.rotation.x = q_this.x();
-    transformStamped.transform.rotation.y = q_this.y();
-    transformStamped.transform.rotation.z = q_this.z();
-    transformStamped.transform.rotation.w = q_this.w();
+  void pub_odom_func(IMUST &xc)
+  {
+    pub_tf_from_state(xc, node_->now());
+  }
 
-    br->sendTransform(transformStamped);
+  void update_base_state(IMUST &xc, double state_time)
+  {
+    {
+      std::lock_guard<std::mutex> lock(state_mtx_);
+      base_state_ = xc;
+      base_state_time_ = state_time;
+      predicted_state_ = xc;
+      last_integration_time_ = state_time;
+      state_initialized_ = true;
+    }
+    // Immediate TF publish to eliminate up-to-10ms latency
+    pub_tf_from_state(xc, rclcpp::Time(static_cast<int64_t>(state_time * 1e9)));
   }
 
   void pub_localtraj(PLV(3) &pwld, double jour, IMUST &x_curr, int cur_session, pcl::PointCloud<PointType> &pcl_path)
   {
-    pub_odom_func(x_curr);
+    update_base_state(x_curr, x_curr.t);
     pcl::PointCloud<PointType> pcl_send;
     pcl_send.reserve(pwld.size());
     for(Eigen::Vector3d &pw: pwld)
@@ -453,6 +457,100 @@ public:
 
 private:
   rclcpp::Node::SharedPtr node_;
+  rclcpp::TimerBase::SharedPtr hf_timer_;
+
+  IMUST base_state_;
+  IMUST predicted_state_;
+  double base_state_time_ = 0;
+  double last_integration_time_ = 0;
+  bool state_initialized_ = false;
+  std::mutex state_mtx_;
+
+  void pub_tf_from_state(IMUST &xc, rclcpp::Time stamp)
+  {
+    if (!node_) return;
+    Eigen::Quaterniond q_this(xc.R);
+    Eigen::Vector3d t_this = xc.p;
+
+    static std::shared_ptr<tf2_ros::TransformBroadcaster> br = std::make_shared<tf2_ros::TransformBroadcaster>(node_);
+    
+    geometry_msgs::msg::TransformStamped transformStamped;
+    transformStamped.header.stamp = stamp;
+    transformStamped.header.frame_id = "camera_init";
+    transformStamped.child_frame_id = "aft_mapped";
+    transformStamped.transform.translation.x = t_this.x();
+    transformStamped.transform.translation.y = t_this.y();
+    transformStamped.transform.translation.z = t_this.z();
+    transformStamped.transform.rotation.x = q_this.x();
+    transformStamped.transform.rotation.y = q_this.y();
+    transformStamped.transform.rotation.z = q_this.z();
+    transformStamped.transform.rotation.w = q_this.w();
+
+    br->sendTransform(transformStamped);
+  }
+
+  void hf_timer_callback()
+  {
+    if (!state_initialized_ || !node_) return;
+
+    double now = node_->now().seconds();
+
+    // Collect new IMU data since last integration
+    deque<sensor_msgs::msg::Imu::SharedPtr> new_imus;
+    {
+      std::lock_guard<std::mutex> lock(mBuf);
+      for (auto &imu : imu_buf)
+      {
+        double t = rclcpp::Time(imu->header.stamp).seconds();
+        if (t > last_integration_time_ && t <= now)
+          new_imus.push_back(imu);
+      }
+    }
+
+    if (new_imus.size() < 2)
+    {
+      // Not enough IMU data — publish last predicted state with current stamp
+      std::lock_guard<std::mutex> lock(state_mtx_);
+      pub_tf_from_state(predicted_state_, node_->now());
+      return;
+    }
+
+    // Incremental IMU integration
+    {
+      std::lock_guard<std::mutex> lock(state_mtx_);
+      IMUST &state = predicted_state_;
+
+      for (size_t i = 1; i < new_imus.size(); i++)
+      {
+        sensor_msgs::msg::Imu &imu1 = *new_imus[i - 1];
+        sensor_msgs::msg::Imu &imu2 = *new_imus[i];
+
+        double dt = rclcpp::Time(imu2.header.stamp).seconds() 
+                  - rclcpp::Time(imu1.header.stamp).seconds();
+        if (dt <= 0) continue;
+
+        Eigen::Vector3d angvel_avr, acc_avr;
+        angvel_avr << 0.5 * (imu1.angular_velocity.x + imu2.angular_velocity.x),
+                      0.5 * (imu1.angular_velocity.y + imu2.angular_velocity.y),
+                      0.5 * (imu1.angular_velocity.z + imu2.angular_velocity.z);
+        acc_avr << 0.5 * (imu1.linear_acceleration.x + imu2.linear_acceleration.x),
+                   0.5 * (imu1.linear_acceleration.y + imu2.linear_acceleration.y),
+                   0.5 * (imu1.linear_acceleration.z + imu2.linear_acceleration.z);
+
+        angvel_avr -= state.bg;
+        acc_avr = acc_avr * imupre_scale_gravity - state.ba;
+        Eigen::Vector3d acc_imu = state.R * acc_avr + state.g;
+
+        state.p = state.p + state.v * dt + 0.5 * acc_imu * dt * dt;
+        state.v = state.v + acc_imu * dt;
+        state.R = state.R * Exp(angvel_avr, dt);
+      }
+
+      last_integration_time_ = rclcpp::Time(new_imus.back()->header.stamp).seconds();
+
+      pub_tf_from_state(state, node_->now());
+    }
+  }
 };
 
 class FileReaderWriter
@@ -2695,6 +2793,7 @@ int main(int argc, char **argv)
   pub_prev_path = node->create_publisher<sensor_msgs::msg::PointCloud2>("/map_true", pub_qos);
   
   ResultOutput::instance().set_node(node);
+  ResultOutput::instance().start_hf_publisher(10);  // 100Hz TF publishing
 
   VOXEL_SLAM vs(node);
   mp = new int[vs.win_size];
