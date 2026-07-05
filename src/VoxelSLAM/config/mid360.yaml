@@ -24,7 +24,7 @@ voxelslam:
       voxel_size: 2.0
       min_eigen_value: 0.01
       degrade_bound: 100
-      point_notime: 0
+      point_notime: 1
 
     local_ba:
       win_size: 10
