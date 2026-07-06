@@ -5,6 +5,7 @@ using namespace std;
 // Define global variables declared in hpp
 rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_scan, pub_cmap, pub_init, pub_pmap;
 rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_test, pub_prev_path, pub_curr_path;
+rclcpp::Publisher<std_msgs::msg::Empty>::SharedPtr pub_reset;
 
 // Global variables for voxel map and optimization
 Eigen::Vector4d min_point;
@@ -1564,6 +1565,7 @@ public:
       mp[i] = i;
     win_base = 0; win_count = 0; pcl_path.clear();
     pub_pl_func(pcl_path, pub_cmap, node_);
+    pub_reset->publish(std_msgs::msg::Empty());
     RCLCPP_WARN(node_->get_logger(), "Reset");
   }
 
@@ -2693,6 +2695,7 @@ int main(int argc, char **argv)
   pub_test = node->create_publisher<sensor_msgs::msg::PointCloud2>("/map_test", pub_qos);
   pub_curr_path = node->create_publisher<sensor_msgs::msg::PointCloud2>("/map_path", pub_qos);
   pub_prev_path = node->create_publisher<sensor_msgs::msg::PointCloud2>("/map_true", pub_qos);
+  pub_reset = node->create_publisher<std_msgs::msg::Empty>("/slam_reset", pub_qos);
   
   ResultOutput::instance().set_node(node);
 

@@ -22,6 +22,7 @@
 #include <Eigen/SparseQR>
 #include "BTC.h"
 #include <rclcpp/rclcpp.hpp>
+#include <std_msgs/msg/empty.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <pcl_conversions/pcl_conversions.h>
@@ -32,6 +33,7 @@ using namespace std;
 // Forward declarations for ROS 2 publishers
 extern rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_scan, pub_cmap, pub_init, pub_pmap;
 extern rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_test, pub_prev_path, pub_curr_path;
+extern rclcpp::Publisher<std_msgs::msg::Empty>::SharedPtr pub_reset;
 
 template <typename T>
 void pub_pl_func(T &pl, rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr &pub, rclcpp::Node::SharedPtr node)
