@@ -9,6 +9,14 @@ endif()
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# OpenMP support (for IKFoM threaded operations)
+find_package(OpenMP QUIET)
+if(OpenMP_FOUND)
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
+  add_definitions(-DMP_EN)
+  add_definitions(-DMP_PROC_NUM=4)
+endif()
+
 # Find ROS 2 packages
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
@@ -21,7 +29,6 @@ find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(tf2_eigen REQUIRED)
 find_package(pcl_conversions REQUIRED)
-find_package(pcl_ros REQUIRED)
 find_package(livox_ros_driver2 REQUIRED)
 
 # Find non-ROS packages
@@ -31,12 +38,23 @@ find_package(GTSAM REQUIRED QUIET)
 
 include_directories(
   src
+  include
+  include/IKFoM/IKFoM_toolkit
+  include/IKFoM/IKFoM_toolkit/esekfom
+  include/IKFoM/IKFoM_toolkit/mtk
   ${EIGEN3_INCLUDE_DIR}
   ${PCL_INCLUDE_DIRS}
   ${GTSAM_INCLUDE_DIR}
 )
 
-add_executable(voxelslam src/voxelslam.cpp src/BTC.cpp)
+# Main executable with all source files
+add_executable(voxelslam
+  src/voxelslam.cpp
+  src/BTC.cpp
+  src/Estimator.cpp
+  src/IMU_Processing.cpp
+  src/parameters.cpp
+)
 
 # Link against ROS 2 and other libraries
 ament_target_dependencies(voxelslam
@@ -50,7 +68,6 @@ ament_target_dependencies(voxelslam
   tf2_geometry_msgs
   tf2_eigen
   pcl_conversions
-  pcl_ros
   livox_ros_driver2
 )
 

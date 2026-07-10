@@ -2,9 +2,15 @@
 
 using namespace std;
 
+#define DEG2RAD(deg) ((deg) * M_PI / 180.0)
+
 // Define global variables declared in hpp
 rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_scan, pub_cmap, pub_init, pub_pmap;
 rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_test, pub_prev_path, pub_curr_path;
+
+// Odometry publisher (new: 100Hz)
+rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_odom;
+rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_path;
 
 // Global variables for voxel map and optimization
 Eigen::Vector4d min_point;
@@ -31,79 +37,7 @@ deque<double> time_buf;
 double imu_last_time = -1;
 double last_pcl_time = -1;
 
-void imu_handler(const sensor_msgs::msg::Imu::SharedPtr msg_in)
-{
-  static int flag = 1;
-  if(flag)
-  {
-    flag = 0;
-    printf("Time0: %lf\n", rclcpp::Time(msg_in->header.stamp).seconds());
-  }
-
-  sensor_msgs::msg::Imu::SharedPtr msg = std::make_shared<sensor_msgs::msg::Imu>(*msg_in);
-
-  mBuf.lock();
-  imu_last_time = rclcpp::Time(msg->header.stamp).seconds();
-  imu_buf.push_back(msg);
-  mBuf.unlock();
-}
-
-void pcl_handler_livox(const livox_ros_driver2::msg::CustomMsg::SharedPtr msg)
-{
-  pcl::PointCloud<PointType>::Ptr pl_ptr(new pcl::PointCloud<PointType>());
-  double t0 = feat.process(*msg, *pl_ptr);
-
-  if(pl_ptr->empty())
-  {
-    PointType ap; 
-    ap.x = 0; ap.y = 0; ap.z = 0; 
-    ap.intensity = 0; ap.curvature = 0;
-    pl_ptr->push_back(ap);
-    ap.curvature = 0.09;
-    pl_ptr->push_back(ap);
-  }
-
-  sort(pl_ptr->begin(), pl_ptr->end(), [](PointType &x, PointType &y)
-  {
-    return x.curvature < y.curvature;
-  });
-  while(pl_ptr->back().curvature > 0.11)
-    pl_ptr->points.pop_back();
-
-  mBuf.lock();
-  time_buf.push_back(t0);
-  pcl_buf.push_back(pl_ptr);
-  mBuf.unlock();
-}
-
-void pcl_handler_standard(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
-{
-  pcl::PointCloud<PointType>::Ptr pl_ptr(new pcl::PointCloud<PointType>());
-  double t0 = feat.process(*msg, *pl_ptr);
-
-  if(pl_ptr->empty())
-  {
-    PointType ap; 
-    ap.x = 0; ap.y = 0; ap.z = 0; 
-    ap.intensity = 0; ap.curvature = 0;
-    pl_ptr->push_back(ap);
-    ap.curvature = 0.09;
-    pl_ptr->push_back(ap);
-  }
-
-  sort(pl_ptr->begin(), pl_ptr->end(), [](PointType &x, PointType &y)
-  {
-    return x.curvature < y.curvature;
-  });
-  while(pl_ptr->back().curvature > 0.11)
-    pl_ptr->points.pop_back();
-
-  mBuf.lock();
-  time_buf.push_back(t0);
-  pcl_buf.push_back(pl_ptr);
-  mBuf.unlock();
-}
-
+// Legacy sync_packages (used by loop closure and global mapping data pipeline)
 bool sync_packages(pcl::PointCloud<PointType>::Ptr &pl_ptr, deque<sensor_msgs::msg::Imu::SharedPtr> &imus, IMUEKF &p_imu)
 {
   static bool pl_ready = false;
@@ -160,6 +94,80 @@ bool sync_packages(pcl::PointCloud<PointType>::Ptr &pl_ptr, deque<sensor_msgs::m
     return true;
   else
     return false;
+}
+
+// Time compressing: group consecutive points with close timestamps
+template<typename T>
+std::vector<int> time_compressing(PointCloudXYZI::Ptr &pl)
+{
+  std::vector<int> time_seq;
+  int plsize = pl->size();
+  if (plsize == 0) return time_seq;
+  
+  int cnt = 1;
+  for (int i = 1; i < plsize; i++)
+  {
+    if (pl->points[i].curvature - pl->points[i-1].curvature < 1e-7)
+      cnt++;
+    else
+    {
+      time_seq.push_back(cnt);
+      cnt = 1;
+    }
+  }
+  time_seq.push_back(cnt);
+  return time_seq;
+}
+
+// Point-LIO style sync: synchronize LiDAR scan with IMU queue into MeasureGroup
+bool sync_packages(MeasureGroup &meas)
+{
+  if(pcl_buf.empty() || imu_buf.empty()) return false;
+
+  if(!imu_buf.empty() && rclcpp::Time(imu_buf.back()->header.stamp).seconds() < time_buf.front())
+    return false;
+
+  if(!imu_buf.empty() && rclcpp::Time(imu_buf.front()->header.stamp).seconds() > time_buf.front())
+    return false;
+
+  mBuf.lock();
+  meas.lidar = pcl_buf.front();
+  meas.lidar_beg_time = time_buf.front();
+  pcl_buf.pop_front();
+  time_buf.pop_front();
+  mBuf.unlock();
+
+  if(meas.lidar->empty()) return false;
+
+  meas.lidar_end_time = meas.lidar_beg_time + meas.lidar->points.back().curvature;
+
+  if(point_notime)
+  {
+    if(last_pcl_time < 0)
+    {
+      last_pcl_time = meas.lidar_beg_time;
+      return false;
+    }
+    meas.lidar_end_time = meas.lidar_beg_time;
+    meas.lidar_beg_time = last_pcl_time;
+    last_pcl_time = meas.lidar_end_time;
+  }
+
+  mBuf.lock();
+  double imu_time = rclcpp::Time(imu_buf.front()->header.stamp).seconds();
+  meas.imu.clear();
+  meas.imu.push_back(imu_buf.front());
+
+  while(imu_time < meas.lidar_end_time && !imu_buf.empty())
+  {
+    imu_time = rclcpp::Time(imu_buf.front()->header.stamp).seconds();
+    if(imu_time > meas.lidar_end_time + 0.02) break;
+    meas.imu.push_back(imu_buf.front());
+    imu_buf.pop_front();
+  }
+  mBuf.unlock();
+
+  return meas.imu.size() > 2;
 }
 
 void calcBodyVar(Eigen::Vector3d &pb, const float range_inc, const float degree_inc, Eigen::Matrix3d &var) 
@@ -549,6 +557,26 @@ private:
       last_integration_time_ = rclcpp::Time(new_imus.back()->header.stamp).seconds();
 
       pub_tf_from_state(state, node_->now());
+
+      // Also publish odometry at 100Hz
+      {
+        nav_msgs::msg::Odometry odom;
+        odom.header.frame_id = "camera_init";
+        odom.child_frame_id = "aft_mapped";
+        odom.header.stamp = node_->now();
+        odom.pose.pose.position.x = state.p.x();
+        odom.pose.pose.position.y = state.p.y();
+        odom.pose.pose.position.z = state.p.z();
+        Eigen::Quaterniond q(state.R);
+        odom.pose.pose.orientation.w = q.w();
+        odom.pose.pose.orientation.x = q.x();
+        odom.pose.pose.orientation.y = q.y();
+        odom.pose.pose.orientation.z = q.z();
+        odom.twist.twist.linear.x = state.v.x();
+        odom.twist.twist.linear.y = state.v.y();
+        odom.twist.twist.linear.z = state.v.z();
+        pub_odom->publish(odom);
+      }
     }
   }
 };
@@ -1070,6 +1098,68 @@ public:
   }
 
 };
+
+// ===== 100Hz Odometry publishing (Point-LIO style) =====
+nav_msgs::msg::Path odom_path;
+geometry_msgs::msg::PoseStamped msg_body_pose;
+
+void publish_odometry_point(rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr &pubOdomAftMapped,
+                            rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr &pubPath,
+                            double timestamp)
+{
+  nav_msgs::msg::Odometry odomAftMapped;
+  odomAftMapped.header.frame_id = "camera_init";
+  odomAftMapped.child_frame_id = "aft_mapped";
+  odomAftMapped.header.stamp = rclcpp::Time(static_cast<int64_t>(timestamp * 1e9));
+
+  if (!use_imu_as_input)
+  {
+    Eigen::Quaterniond q(kf_output.x_.rot);
+    odomAftMapped.pose.pose.orientation.w = q.w();
+    odomAftMapped.pose.pose.orientation.x = q.x();
+    odomAftMapped.pose.pose.orientation.y = q.y();
+    odomAftMapped.pose.pose.orientation.z = q.z();
+
+    odomAftMapped.pose.pose.position.x = kf_output.x_.pos(0);
+    odomAftMapped.pose.pose.position.y = kf_output.x_.pos(1);
+    odomAftMapped.pose.pose.position.z = kf_output.x_.pos(2);
+
+    odomAftMapped.twist.twist.linear.x = kf_output.x_.vel(0);
+    odomAftMapped.twist.twist.linear.y = kf_output.x_.vel(1);
+    odomAftMapped.twist.twist.linear.z = kf_output.x_.vel(2);
+    odomAftMapped.twist.twist.angular.x = kf_output.x_.omg(0);
+    odomAftMapped.twist.twist.angular.y = kf_output.x_.omg(1);
+    odomAftMapped.twist.twist.angular.z = kf_output.x_.omg(2);
+  }
+  else
+  {
+    Eigen::Quaterniond q(kf_input.x_.rot);
+    odomAftMapped.pose.pose.orientation.w = q.w();
+    odomAftMapped.pose.pose.orientation.x = q.x();
+    odomAftMapped.pose.pose.orientation.y = q.y();
+    odomAftMapped.pose.pose.orientation.z = q.z();
+
+    odomAftMapped.pose.pose.position.x = kf_input.x_.pos(0);
+    odomAftMapped.pose.pose.position.y = kf_input.x_.pos(1);
+    odomAftMapped.pose.pose.position.z = kf_input.x_.pos(2);
+    odomAftMapped.twist.twist.linear.x = kf_input.x_.vel(0);
+    odomAftMapped.twist.twist.linear.y = kf_input.x_.vel(1);
+    odomAftMapped.twist.twist.linear.z = kf_input.x_.vel(2);
+  }
+
+  if (pubOdomAftMapped) pubOdomAftMapped->publish(odomAftMapped);
+
+  if (pubPath && path_en)
+  {
+    msg_body_pose.header.stamp = odomAftMapped.header.stamp;
+    msg_body_pose.header.frame_id = "camera_init";
+    msg_body_pose.pose = odomAftMapped.pose.pose;
+    odom_path.header.stamp = odomAftMapped.header.stamp;
+    odom_path.header.frame_id = "camera_init";
+    odom_path.poses.push_back(msg_body_pose);
+    pubPath->publish(odom_path);
+  }
+}
 
 class VOXEL_SLAM
 {
@@ -1778,7 +1868,8 @@ public:
 
   }
 
-  void thd_odometry_localmapping()
+  // ===== Point-LIO style point-by-point odometry =====
+    void thd_odometry_localmapping()
   {
     PLV(3) pwld;
     Eigen::Vector3d last_pos(0, 0 ,0);
@@ -1808,9 +1899,11 @@ public:
       }
 
       deque<sensor_msgs::msg::Imu::SharedPtr> imus;
-      if(!sync_packages(pcl_curr, imus, odom_ekf))
+      pcl_curr.reset(new pcl::PointCloud<PointType>());
+      
+      if(\!sync_packages(Measures))
       {
-        if(octos_release.size() != 0)
+        if(octos_release.size() \!= 0)
         {
           int msize = octos_release.size();
           if(msize > 1000) msize = 1000;
@@ -1825,7 +1918,7 @@ public:
         {
           release_flag = false;
           vector<OctoTree*> octos;
-          for(auto iter=surf_map.begin(); iter!=surf_map.end();)
+          for(auto iter=surf_map.begin(); iter\!=surf_map.end();)
           {
             int dis = jour - iter->second->jour;
             if(dis < 700)
@@ -1858,6 +1951,12 @@ public:
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
         continue;
       }
+
+      // Bridge: populate old-style variables from Measures
+      *pcl_curr = *(Measures.lidar);
+      imus = Measures.imu;
+      odom_ekf.pcl_beg_time = Measures.lidar_beg_time;
+      odom_ekf.pcl_end_time = Measures.lidar_end_time;
 
       static int first_flag = 1;
       if (first_flag)
@@ -1909,7 +2008,13 @@ public:
 
         pwld.clear();
         pvec_update(pptr, x_curr, pwld);
+
+        // Publish local trajectory (point cloud at scan rate)
         ResultOutput::instance().pub_localtraj(pwld, jour, x_curr, (int)sessionNames.size()-1, pcl_path);
+
+        // Publish odometry at 100Hz via the HF publisher
+        // (the HF timer callback already handles IMU integration & TF publishing)
+        ResultOutput::instance().update_base_state(x_curr, x_curr.t);
 
         win_count++;
         x_buf.push_back(x_curr);
@@ -2022,7 +2127,7 @@ public:
     }
 
     vector<OctoTree *> octos;
-    for(auto iter=surf_map.begin(); iter!=surf_map.end(); iter++)
+    for(auto iter=surf_map.begin(); iter\!=surf_map.end(); iter++)
     {
       iter->second->tras_ptr(octos);
       iter->second->clear_slwd(sws[0]);
@@ -2039,62 +2144,7 @@ public:
     malloc_trim(0);
   }
 
-  void build_graph(gtsam::Values &initial, gtsam::NonlinearFactorGraph &graph, int cur_id, PGO_Edges &lp_edges, gtsam::noiseModel::Diagonal::shared_ptr default_noise, vector<int> &ids, vector<int> &stepsizes, int lpedge_enable)
-  {
-    initial.clear(); graph = gtsam::NonlinearFactorGraph();
-    ids.clear();
-    lp_edges.connect(cur_id, ids);
-
-    stepsizes.clear(); stepsizes.push_back(0);
-    for(int i=0; i<(int)ids.size(); i++)
-      stepsizes.push_back(stepsizes.back() + multimap_scanPoses[ids[i]]->size());
-    
-    for(int ii=0; ii<(int)ids.size(); ii++)
-    {
-      int bsize = stepsizes[ii], id = ids[ii];
-      for(int j=bsize; j<stepsizes[ii+1]; j++)
-      {
-        IMUST &xc = multimap_scanPoses[id]->at(j-bsize)->x;
-        gtsam::Pose3 pose3(gtsam::Rot3(xc.R), gtsam::Point3(xc.p));
-        initial.insert(j, pose3);
-        if(j > bsize)
-        {
-          gtsam::Vector samv6(multimap_scanPoses[ids[ii]]->at(j-1-bsize)->v6);
-          gtsam::noiseModel::Diagonal::shared_ptr v6_noise = gtsam::noiseModel::Diagonal::Variances(samv6);
-          add_edge(j-1, j, multimap_scanPoses[id]->at(j-1-bsize)->x, multimap_scanPoses[id]->at(j-bsize)->x, graph, v6_noise);
-        }
-      }
-    }
-
-    if(multimap_scanPoses[ids[0]]->size() != 0)
-    {
-      Eigen::Matrix<double, 6, 1> v6_fixd;
-      v6_fixd << 1e-9, 1e-9, 1e-9, 1e-9, 1e-9, 1e-9;
-      gtsam::noiseModel::Diagonal::shared_ptr fixd_noise = gtsam::noiseModel::Diagonal::Variances(gtsam::Vector(v6_fixd));
-      IMUST xf = multimap_scanPoses[ids[0]]->at(0)->x;
-      gtsam::Pose3 pose3 = gtsam::Pose3(gtsam::Rot3(xf.R), gtsam::Point3(xf.p));
-      graph.addPrior(0, pose3, fixd_noise);
-    }
-
-    if(lpedge_enable == 1)
-    for(PGO_Edge &edge: lp_edges.edges)
-    {
-      vector<int> step(2);
-      if(edge.is_adapt(ids, step))
-      {
-        int mp[2] = {stepsizes[step[0]], stepsizes[step[1]]};
-        for(int i=0; i<(int)edge.rots.size(); i++)
-        {
-          int id1 = mp[0] + edge.ids1[i];
-          int id2 = mp[1] + edge.ids2[i];
-          add_edge(id1, id2, edge.rots[i], edge.tras[i], graph, default_noise);
-        }
-      }
-    }
-    
-  }
-
-  void thd_loop_closure()
+void thd_loop_closure()
   {
     pl_kdmap.reset(new pcl::PointCloud<PointType>);
     vector<STDescManager*> std_managers;
@@ -2792,8 +2842,12 @@ int main(int argc, char **argv)
   pub_curr_path = node->create_publisher<sensor_msgs::msg::PointCloud2>("/map_path", pub_qos);
   pub_prev_path = node->create_publisher<sensor_msgs::msg::PointCloud2>("/map_true", pub_qos);
   
+  // 100Hz Odometry publisher (Point-LIO style)
+  pub_odom = node->create_publisher<nav_msgs::msg::Odometry>("/aft_mapped_to_init", pub_qos);
+  pub_path = node->create_publisher<nav_msgs::msg::Path>("/path", pub_qos);
+  
   ResultOutput::instance().set_node(node);
-  ResultOutput::instance().start_hf_publisher(10);  // 100Hz TF publishing
+  ResultOutput::instance().start_hf_publisher(10);  // 100Hz TF + Odometry publishing
 
   VOXEL_SLAM vs(node);
   mp = new int[vs.win_size];

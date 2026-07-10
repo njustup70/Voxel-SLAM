@@ -5,6 +5,10 @@
 #include "voxel_map.hpp"
 #include "feature_point.hpp"
 #include "loop_refine.hpp"
+#include "common_lib.h"
+#include "Estimator.h"
+#include "IMU_Processing.h"
+#include "parameters.h"
 #include <mutex>
 #include <Eigen/Eigenvalues>
 #include <tf2_ros/transform_broadcaster.h>
@@ -24,6 +28,8 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <nav_msgs/msg/odometry.hpp>
+#include <nav_msgs/msg/path.hpp>
 #include <pcl_conversions/pcl_conversions.h>
 #include <livox_ros_driver2/msg/custom_msg.hpp>
 
